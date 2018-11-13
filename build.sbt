@@ -6,7 +6,7 @@ organization := "com.ankurdave"
 
 scalaVersion := "2.12.7"
 
-//libraryDependencies += "org.scalatest" %% "scalatest" % "2.2.6" % "test"
+libraryDependencies += "org.scalatest" %% "scalatest" % "3.0.5" % "test"
 
 javaOptions in Test ++= Seq("-Xmx2048m", "-XX:ReservedCodeCacheSize=384m")
 
