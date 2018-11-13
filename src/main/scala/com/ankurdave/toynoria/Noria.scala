@@ -2,10 +2,14 @@ package com.ankurdave.toynoria
 
 import scala.collection.mutable
 
+trait Record {
+  def id: Id
+}
+
 /**
  * Noria dataflow node.
  */
-sealed trait Node[ResultType] {
+sealed trait Node[ResultType <: Record] {
   def query(): Seq[ResultType]
 
   private val parents = mutable.ArrayBuffer.empty[UnaryNode[ResultType, _]]
@@ -33,139 +37,141 @@ sealed trait Node[ResultType] {
   }
 }
 
-sealed trait UnaryNode[InputType, ResultType] extends Node[ResultType] {
+sealed trait UnaryNode[InputType <: Record, ResultType <: Record] extends Node[ResultType] {
   def handle(msg: Msg[InputType]): Unit
 }
 
-sealed trait BinaryNode[LeftInputType, RightInputType, ResultType] extends Node[ResultType] {
+sealed trait BinaryNode[LeftInputType <: Record, RightInputType <: Record, ResultType <: Record]
+  extends Node[ResultType] {
+
   def handleLeft(msg: Msg[LeftInputType]): Unit
   def handleRight(msg: Msg[RightInputType]): Unit
 }
 
-case class Table[T]() extends UnaryNode[T, T] {
-  private val records = new mutable.HashSet[T]
+case class Table[T <: Record]() extends UnaryNode[T, T] {
+  private val records = new mutable.HashMap[Id, T]
 
   override def handle(msg: Msg[T]): Unit = {
     logTrace("Table.handle " + msg)
     msg match {
       case Insert(x) =>
-        records += x
+        records.update(x.id, x)
       case Update(x) =>
-        records -= x
-        records += x
+        records.update(x.id, x)
       case Delete(x) =>
-        records -= x
+        records -= x.id
       case Evict(x) =>
         // Do nothing: The base table must not evict records, but parents may
     }
     sendToParents(msg)
   }
 
-  override def query(): Seq[T] = records.toSeq
+  override def query(): Seq[T] = records.values.toSeq
 }
 
-case class Aggregate[A, B](
-  key: A => (Id, B),
-  add: (B, B) => B,
-  subtract: (B, B) => B,
-  child: Node[A]) extends UnaryNode[A, AggResult[B]] {
+case class Aggregate[A <: Record](
+  zero: (Id) => A,
+  add: (A, A) => A,
+  subtract: (A, A) => A,
+  child: Node[A]) extends UnaryNode[A, A] {
 
-  private val state = new mutable.HashMap[Id, B]
+  private val state = new mutable.HashMap[Id, A]
 
   override def handle(msg: Msg[A]): Unit = {
     logTrace("Aggregate.handle " + msg)
     msg match {
-      case Insert(x) =>
-        val (id, b) = key(x)
-        if (state.contains(id)) {
-          state.update(id, add(state(id), b))
-          sendToParents(Update(AggResult(id, state(id))))
+      case Insert(a) =>
+        if (state.contains(a.id)) {
+          state.update(a.id, add(state(a.id), a))
+          sendToParents(Update(state(a.id)))
         } else {
-          state.update(id, b)
-          sendToParents(Insert(AggResult(id, state(id))))
+          // id might have been evicted, so request all matching records from child
+          state.update(a.id, zero(a.id))
+          sendToParents(Insert(state(a.id)))
+          logTrace("Aggregate requesting all records...")
+          for {
+            a2 <- child.query()
+            if a.id == a2.id
+          } {
+            handle(Insert(a2))
+          }
+          logTrace("...done.")
         }
 
-      case Update(x) =>
-        val (id, b) = key(x)
-        if (state.contains(id)) {
-          state.update(id, add(state(id), b))
-          sendToParents(Update(AggResult(id, state(id))))
+      case Update(a) =>
+        if (state.contains(a.id)) {
+          state.update(a.id, add(state(a.id), a))
+          sendToParents(Update(state(a.id)))
         } else {
           // id must have been evicted, so silently drop the update
         }
 
-      case Delete(x) =>
-        val (id, b) = key(x)
-        if (state.contains(id)) {
-          state.update(id, subtract(state(id), b))
-          sendToParents(Update(AggResult(id, state(id))))
+      case Delete(a) =>
+        if (state.contains(a.id)) {
+          state.update(a.id, subtract(state(a.id), a))
+          // Send parents an update, not a delete, because deletion from an aggregation is just a
+          // subtraction
+          sendToParents(Update(state(a.id)))
         } else {
           // id must have been evicted, so silently drop the deletion
         }
 
-      case Evict(x) =>
-        val (id, b) = key(x)
-        if (state.contains(id)) {
-          sendToParents(Evict(AggResult(id, state(id))))
-          state -= id
+      case Evict(a) =>
+        if (state.contains(a.id)) {
+          state -= a.id
+          sendToParents(Evict(a))
         }
     }
   }
 
-  override def query(): Seq[AggResult[B]] = {
-    state.toSeq.map { case (id, b) => AggResult(id, b) }
+  override def query(): Seq[A] = {
+    state.values.toSeq
   }
 }
 
-case class Join[A, B, C, D, E](
-  keyLeft: A => (Id, B),
-  keyRight: C => (Id, D),
-  combine: (Id, B, D) => E,
-  filterLeft: (Id, A) => Boolean,
-  filterRight: (Id, C) => Boolean,
+case class Join[A <: Record, B <: Record, C <: Record](
+  combine: (A, B) => C,
   left: Node[A],
-  right: Node[C]) extends BinaryNode[A, C, E] {
+  right: Node[B]) extends BinaryNode[A, B, C] {
 
-  private val state = new mutable.HashMap[Id, (mutable.HashSet[B], mutable.HashSet[D])]
+  private val state = new mutable.HashMap[Id, (mutable.HashMap[Id, A], mutable.HashMap[Id, B])]
 
-  override def query(): Seq[E] = {
+  override def query(): Seq[C] = {
+    logTrace("Join.query state=" + state.toSeq.toString)
     for {
-      (id, (bs, ds)) <- state.toSeq
-      b <- bs
-      d <- ds
-    } yield combine(id, b, d)
+      (id, (as, bs)) <- state.toSeq
+      a <- as.values
+      b <- bs.values
+    } yield combine(a, b)
   }
 
   override def handleLeft(msg: Msg[A]): Unit = {
     logTrace("Join.handleLeft " + msg)
     msg match {
-      case Insert(x) =>
-        val (id, b) = keyLeft(x)
-        if (state.contains(id)) {
-          val (bs, ds) = state(id)
-          bs += b
+      case Insert(a) =>
+        if (state.contains(a.id)) {
+          val (as, bs) = state(a.id)
+          as.update(a.id, a)
 
-          for (d <- ds) {
-            sendToParents(Insert(combine(id, b, d)))
+          for (b <- bs.values) {
+            sendToParents(Insert(combine(a, b)))
           }
         } else {
-          val bs = mutable.HashSet[B]()
-          bs += b
-          state.update(id, (bs, mutable.HashSet()))
-          for (c <- right.query(); if filterRight(id, c)) {
-            handleRight(Insert(c))
+          val as = mutable.HashMap[Id, A]()
+          as.update(a.id, a)
+          state.update(a.id, (as, mutable.HashMap()))
+          for (b <- right.query(); if a.id == b.id) {
+            handleRight(Insert(b))
           }
         }
 
-      case Update(x) =>
-        val (id, b) = keyLeft(x)
-        if (state.contains(id)) {
-          val (bs, ds) = state(id)
-          if (bs.contains(b)) {
-            bs -= b
-            bs += b
-            for (d <- ds) {
-              sendToParents(Update(combine(id, b, d)))
+      case Update(a) =>
+        if (state.contains(a.id)) {
+          val (as, bs) = state(a.id)
+          if (as.contains(a.id)) {
+            as.update(a.id, a)
+            for (b <- bs.values) {
+              sendToParents(Update(combine(a, b)))
             }
           } else {
             throw new Exception("got an update to a nonexistent record")
@@ -174,14 +180,13 @@ case class Join[A, B, C, D, E](
           // id must have been evicted, so silently drop the update
         }
 
-      case Delete(x) =>
-        val (id, b) = keyLeft(x)
-        if (state.contains(id)) {
-          val (bs, ds) = state(id)
-          if (bs.contains(b)) {
-            bs -= b
-            for (d <- ds) {
-              sendToParents(Delete(combine(id, b, d)))
+      case Delete(a) =>
+        if (state.contains(a.id)) {
+          val (as, bs) = state(a.id)
+          if (as.contains(a.id)) {
+            as -= a.id
+            for (b <- bs.values) {
+              sendToParents(Delete(combine(a, b)))
             }
           } else {
             throw new Exception("got a delete to a nonexistent record")
@@ -190,67 +195,59 @@ case class Join[A, B, C, D, E](
           // id must have been evicted, so silently drop the delete
         }
 
-      case Evict(x) =>
-        val (id, _) = keyLeft(x)
-        if (state.contains(id)) {
-          val (bs, ds) = state(id)
-          for (b <- bs; d <- ds) {
-            sendToParents(Evict(combine(id, b, d)))
+      case Evict(a) =>
+        if (state.contains(a.id)) {
+          val (as, bs) = state(a.id)
+          for (a <- as.values; b <- bs.values) {
+            sendToParents(Evict(combine(a, b)))
           }
-          state -= id
+          state -= a.id
         }
     }
   }
 
-  override def handleRight(msg: Msg[C]): Unit = {
+  override def handleRight(msg: Msg[B]): Unit = {
     logTrace("Join.handleRight " + msg)
     msg match {
-      case Insert(x) =>
-        val (id, d) = keyRight(x)
-        if (state.contains(id)) {
-          val (bs, ds) = state(id)
-          ds += d
+      case Insert(b) =>
+        if (state.contains(b.id)) {
+          val (as, bs) = state(b.id)
+          bs.update(b.id, b)
 
-          for (b <- bs) {
-            sendToParents(Insert(combine(id, b, d)))
+          for (a <- as.values) {
+            sendToParents(Insert(combine(a, b)))
           }
         } else {
-          val ds = mutable.HashSet[D]()
-          ds += d
-          state.update(id, (mutable.HashSet(), ds))
-          for (a <- left.query(); if filterLeft(id, a)) {
+          val bs = mutable.HashMap[Id, B]()
+          bs.update(b.id, b)
+          state.update(b.id, (mutable.HashMap(), bs))
+          for (a <- left.query(); if a.id == b.id) {
             handleLeft(Insert(a))
           }
         }
 
-      case Update(x) =>
-        val (id, d) = keyRight(x)
-        if (state.contains(id)) {
-          val (bs, ds) = state(id)
-          if (ds.contains(d)) {
-            ds -= d
-            ds += d
-            for (b <- bs) {
-              sendToParents(Update(combine(id, b, d)))
+      case Update(b) =>
+        if (state.contains(b.id)) {
+          val (as, bs) = state(b.id)
+          if (bs.contains(b.id)) {
+            bs.update(b.id, b)
+            for (a <- as.values) {
+              sendToParents(Update(combine(a, b)))
             }
           } else {
-            ds += d
-            for (b <- bs) {
-              sendToParents(Update(combine(id, b, d)))
-            }
+            throw new Exception("got an update to a nonexistent record")
           }
         } else {
           // id must have been evicted, so silently drop the update
         }
 
-      case Delete(x) =>
-        val (id, d) = keyRight(x)
-        if (state.contains(id)) {
-          val (bs, ds) = state(id)
-          if (ds.contains(d)) {
-            ds -= d
-            for (b <- bs) {
-              sendToParents(Delete(combine(id, b, d)))
+      case Delete(b) =>
+        if (state.contains(b.id)) {
+          val (as, bs) = state(b.id)
+          if (bs.contains(b.id)) {
+            bs -= b.id
+            for (a <- as.values) {
+              sendToParents(Delete(combine(a, b)))
             }
           } else {
             throw new Exception("got a delete to a nonexistent record")
@@ -259,75 +256,83 @@ case class Join[A, B, C, D, E](
           // id must have been evicted, so silently drop the delete
         }
 
-      case Evict(x) =>
-        val (id, _) = keyRight(x)
-        if (state.contains(id)) {
-          val (bs, ds) = state(id)
-          for (b <- bs; d <- ds) {
-            sendToParents(Evict(combine(id, b, d)))
+      case Evict(b) =>
+        if (state.contains(b.id)) {
+          val (as, bs) = state(b.id)
+          for (a <- as.values; b <- bs.values) {
+            sendToParents(Evict(combine(a, b)))
           }
-          state -= id
+          state -= b.id
         }
     }
   }
 }
 
-case class TopK[A : Ordering](
+case class TopK[A <: Record : Ordering](
   k: Int,
   child: Node[A]) extends UnaryNode[A, A] {
 
-  private val state = mutable.HashSet[A]()
+  private val state = mutable.HashMap[Id, A]()
 
   override def query(): Seq[A] = {
-    state.toSeq.sorted
+    state.values.toSeq.sorted
   }
 
   override def handle(msg: Msg[A]): Unit = {
     logTrace("TopK.handle " + msg)
+    logTrace("pre: TopK = " + state.toString)
     msg match {
-      case Insert(x) =>
+      case Insert(a) =>
         if (state.size < k) {
-          state += x
-          sendToParents(Insert(x))
-        } else if (implicitly[Ordering[A]].gt(x, state.min)) {
-          val dropped = state.min
-          state -= dropped
-          state += x
+          state.update(a.id, a)
+          sendToParents(Insert(a))
+        } else if (implicitly[Ordering[A]].gt(a, state.values.min)) {
+          val dropped = state.values.min
+          state.remove(dropped.id)
           sendToParents(Delete(dropped))
-          sendToParents(Insert(x))
+          state.update(a.id, a)
+          sendToParents(Insert(a))
         }
 
-      case Update(x) =>
-        if (state.size == 0 || implicitly[Ordering[A]].gt(x, state.min)) {
+      case Update(a) =>
+        if (implicitly[Ordering[A]].gt(a, state.values.min)) {
           // The element is in the top k after the update
-          state -= x
-          handle(Insert(x))
-          sendToParents(Update(x))
+          if (state.contains(a.id)) {
+            state.update(a.id, a)
+            sendToParents(Update(a))
+          } else {
+            handle(Insert(a))
+          }
         } else {
-          if (state.contains(x)) {
-            // The update has caused this record to drop below the current minimum. It may still be in
-            // the top k, or some other element may now replace it in the top k. For correctness we
-            // must request a full refresh from the child.
+          if (state.contains(a.id)) {
+            // The update has caused this record to drop below the current minimum. It may still be
+            // in the top k, or some other element may now replace it in the top k. For correctness
+            // we must request a full refresh from the child.
             logTrace("clear")
-            for (a <- query()) {
-              sendToParents(Delete(a))
+            for (a2 <- query()) {
+              sendToParents(Delete(a2))
             }
             state.clear()
-            for (a <- child.query()) {
-              handle(Insert(a))
+            for (a2 <- child.query()) {
+              handle(Insert(a2))
             }
           }
         }
 
-      case Delete(x) =>
-        if (state.contains(x)) {
-          state -= x
-          sendToParents(Delete(x))
+      case Delete(a) =>
+        if (state.contains(a.id)) {
+          state -= a.id
+          sendToParents(Delete(a))
 
           // After the deletion, some other element may now replace the deleted element in the top
           // k. For correctness we must request a full refresh from the child.
-          for (a <- child.query()) {
-            handle(Insert(a))
+          logTrace("clear")
+          for (a2 <- query()) {
+            sendToParents(Delete(a2))
+          }
+          state.clear()
+          for (a2 <- child.query()) {
+            handle(Insert(a2))
           }
         }
 
@@ -335,7 +340,7 @@ case class TopK[A : Ordering](
         // TopK does not support eviction because it inherently uses bounded space. Drop the
         // eviction request.
     }
-    logTrace("TopK = " + state.toString)
+    logTrace("post: TopK = " + state.toString)
 
   }
 }
@@ -352,12 +357,3 @@ case class Update[A](x: A) extends Msg[A]
 case class Delete[A](x: A) extends Msg[A]
 
 case class Evict[A](x: A) extends Msg[A]
-
-/** Record type returned by aggregation. */
-case class AggResult[A](id: Id, a: A) {
-  override def equals(other: Any): Boolean = other match {
-    case AggResult(otherId, _) => id == otherId
-    case _ => false
-  }
-  override def hashCode: Int = id.hashCode
-}

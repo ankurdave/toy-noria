@@ -3,7 +3,7 @@ package com.ankurdave
 package object toynoria {
   type Id = Long
 
-  val trace = false
+  var trace = false
 
   def logTrace(msg: String) = {
     if (trace) {

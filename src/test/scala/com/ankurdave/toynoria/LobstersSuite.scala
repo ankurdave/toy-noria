@@ -2,40 +2,32 @@ package com.ankurdave.toynoria
 
 import org.scalatest.FunSuite
 
-case class Vote(storyId: Id, vote: Int)
+case class Vote(override val id: Id, vote: Int) extends Record
 
-case class Story(id: Id, title: String) {
-  override def equals(other: Any): Boolean = other match {
-    case Story(otherId, _) => id == otherId
-    case _ => false
-  }
-  override def hashCode: Int = id.hashCode
-}
+case class Story(override val id: Id, title: String) extends Record
 
-case class StoryWithVoteCount(id: Id, title: String, voteCount: Int) {
-  override def equals(that: Any): Boolean = that match {
-    case StoryWithVoteCount(otherId, _, _) => id == otherId
-    case _ => false
-  }
-  override def hashCode: Int = id.hashCode
-}
+case class StoryWithVoteCount(override val id: Id, title: String, voteCount: Int) extends Record
 
 class LobstersSuite extends FunSuite {
   test("top stories") {
     val votes = Table[Vote]()
     val stories = Table[Story]()
-    val totalVotesByStoryId = Aggregate[Vote, Int](
-      (vote: Vote) => (vote.storyId, vote.vote),
-      _ + _,
-      _ - _,
+    val totalVotesByStoryId = Aggregate[Vote](
+      id => Vote(id, 0),
+      (a, b) => {
+        assert(a.id == b.id)
+        Vote(a.id, a.vote + b.vote)
+      },
+      (a, b) => {
+        assert(a.id == b.id)
+        Vote(a.id, a.vote - b.vote)
+      },
       votes)
-    val storiesWithVoteCount = Join[Story, Story, AggResult[Int], Int, StoryWithVoteCount](
-      (story: Story) => (story.id, story),
-      (aggResult: AggResult[Int]) => (aggResult.id, aggResult.a),
-      (storyId, story: Story, voteCount: Int) => StoryWithVoteCount(
-        story.id, story.title, voteCount),
-      (storyId, story: Story) => story.id == storyId,
-      (storyId, aggResult: AggResult[Int]) => storyId == aggResult.id,
+    val storiesWithVoteCount = Join[Story, Vote, StoryWithVoteCount](
+      (story: Story, voteCount: Vote) => {
+        assert(story.id == voteCount.id)
+        StoryWithVoteCount(story.id, story.title, voteCount.vote)
+      },
       stories,
       totalVotesByStoryId)
     val topStories =
@@ -46,13 +38,17 @@ class LobstersSuite extends FunSuite {
     totalVotesByStoryId.addRightParent(storiesWithVoteCount)
     storiesWithVoteCount.addParent(topStories)
 
+    logTrace("Inserting stories")
     stories.handle(Insert(Story(1, "Story A")))
     stories.handle(Insert(Story(2, "Story B")))
     stories.handle(Insert(Story(3, "Story C")))
 
+    logTrace("Inserting 3 upvotes for story 1")
     votes.handle(Insert(Vote(1, +1)))
     votes.handle(Insert(Vote(1, +1)))
     votes.handle(Insert(Vote(1, +1)))
+
+    logTrace("Inserting 1 downvote for story 2")
     votes.handle(Insert(Vote(2, -1)))
 
     assert(topStories.query().map(_.toString) ===
@@ -68,5 +64,14 @@ class LobstersSuite extends FunSuite {
       Seq(
         StoryWithVoteCount(1, "Story A", 3),
         StoryWithVoteCount(3, "Story C", 100)).map(_.toString))
+
+    trace = true
+
+    votes.handle(Insert(Vote(3, +1)))
+
+    assert(topStories.query().map(_.toString) ===
+      Seq(
+        StoryWithVoteCount(1, "Story A", 3),
+        StoryWithVoteCount(3, "Story C", 101)).map(_.toString))
   }
 }
