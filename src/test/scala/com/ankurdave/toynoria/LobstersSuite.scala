@@ -65,7 +65,9 @@ class LobstersSuite extends FunSuite {
         StoryWithVoteCount(1, "Story A", 3),
         StoryWithVoteCount(3, "Story C", 100)).map(_.toString))
 
-    trace = true
+    stories.handle(Evict(Story(1, "Story A")))
+    stories.handle(Evict(Story(2, "Story B")))
+    stories.handle(Evict(Story(3, "Story C")))
 
     votes.handle(Insert(Vote(3, +1)))
 

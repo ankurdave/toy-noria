@@ -79,6 +79,7 @@ case class Aggregate[A <: Record](
 
   override def handle(msg: Msg[A]): Unit = {
     logTrace("Aggregate.handle " + msg)
+    logTrace("pre: Agg = " + state.toString)
     msg match {
       case Insert(a) =>
         if (state.contains(a.id)) {
@@ -122,6 +123,7 @@ case class Aggregate[A <: Record](
           sendToParents(Evict(a))
         }
     }
+    logTrace("post: Agg = " + state.toString)
   }
 
   override def query(): Seq[A] = {
@@ -134,14 +136,13 @@ case class Join[A <: Record, B <: Record, C <: Record](
   left: Node[A],
   right: Node[B]) extends BinaryNode[A, B, C] {
 
-  private val state = new mutable.HashMap[Id, (mutable.HashMap[Id, A], mutable.HashMap[Id, B])]
-
   override def query(): Seq[C] = {
-    logTrace("Join.query state=" + state.toSeq.toString)
+    val as = left.query().groupBy(_.id)
+    val bs = right.query().groupBy(_.id)
     for {
-      (id, (as, bs)) <- state.toSeq
-      a <- as.values
-      b <- bs.values
+      id <- as.keySet.intersect(bs.keySet).toSeq
+      a <- as(id)
+      b <- bs(id)
     } yield combine(a, b)
   }
 
@@ -149,60 +150,22 @@ case class Join[A <: Record, B <: Record, C <: Record](
     logTrace("Join.handleLeft " + msg)
     msg match {
       case Insert(a) =>
-        if (state.contains(a.id)) {
-          val (as, bs) = state(a.id)
-          as.update(a.id, a)
-
-          for (b <- bs.values) {
-            sendToParents(Insert(combine(a, b)))
-          }
-        } else {
-          val as = mutable.HashMap[Id, A]()
-          as.update(a.id, a)
-          state.update(a.id, (as, mutable.HashMap()))
-          for (b <- right.query(); if a.id == b.id) {
-            handleRight(Insert(b))
-          }
+        for (b <- right.query(); if a.id == b.id) {
+          sendToParents(Insert(combine(a, b)))
         }
 
       case Update(a) =>
-        if (state.contains(a.id)) {
-          val (as, bs) = state(a.id)
-          if (as.contains(a.id)) {
-            as.update(a.id, a)
-            for (b <- bs.values) {
-              sendToParents(Update(combine(a, b)))
-            }
-          } else {
-            throw new Exception("got an update to a nonexistent record")
-          }
-        } else {
-          // id must have been evicted, so silently drop the update
+        for (b <- right.query(); if a.id == b.id) {
+          sendToParents(Update(combine(a, b)))
         }
 
       case Delete(a) =>
-        if (state.contains(a.id)) {
-          val (as, bs) = state(a.id)
-          if (as.contains(a.id)) {
-            as -= a.id
-            for (b <- bs.values) {
-              sendToParents(Delete(combine(a, b)))
-            }
-          } else {
-            throw new Exception("got a delete to a nonexistent record")
-          }
-        } else {
-          // id must have been evicted, so silently drop the delete
+        for (b <- right.query(); if a.id == b.id) {
+          sendToParents(Delete(combine(a, b)))
         }
 
       case Evict(a) =>
-        if (state.contains(a.id)) {
-          val (as, bs) = state(a.id)
-          for (a <- as.values; b <- bs.values) {
-            sendToParents(Evict(combine(a, b)))
-          }
-          state -= a.id
-        }
+        // Join is stateless, so no need to do anything on eviction
     }
   }
 
@@ -210,60 +173,22 @@ case class Join[A <: Record, B <: Record, C <: Record](
     logTrace("Join.handleRight " + msg)
     msg match {
       case Insert(b) =>
-        if (state.contains(b.id)) {
-          val (as, bs) = state(b.id)
-          bs.update(b.id, b)
-
-          for (a <- as.values) {
-            sendToParents(Insert(combine(a, b)))
-          }
-        } else {
-          val bs = mutable.HashMap[Id, B]()
-          bs.update(b.id, b)
-          state.update(b.id, (mutable.HashMap(), bs))
-          for (a <- left.query(); if a.id == b.id) {
-            handleLeft(Insert(a))
-          }
+        for (a <- left.query(); if a.id == b.id) {
+          sendToParents(Insert(combine(a, b)))
         }
 
       case Update(b) =>
-        if (state.contains(b.id)) {
-          val (as, bs) = state(b.id)
-          if (bs.contains(b.id)) {
-            bs.update(b.id, b)
-            for (a <- as.values) {
-              sendToParents(Update(combine(a, b)))
-            }
-          } else {
-            throw new Exception("got an update to a nonexistent record")
-          }
-        } else {
-          // id must have been evicted, so silently drop the update
+        for (a <- left.query(); if a.id == b.id) {
+          sendToParents(Update(combine(a, b)))
         }
 
       case Delete(b) =>
-        if (state.contains(b.id)) {
-          val (as, bs) = state(b.id)
-          if (bs.contains(b.id)) {
-            bs -= b.id
-            for (a <- as.values) {
-              sendToParents(Delete(combine(a, b)))
-            }
-          } else {
-            throw new Exception("got a delete to a nonexistent record")
-          }
-        } else {
-          // id must have been evicted, so silently drop the delete
+        for (a <- left.query(); if a.id == b.id) {
+          sendToParents(Delete(combine(a, b)))
         }
 
       case Evict(b) =>
-        if (state.contains(b.id)) {
-          val (as, bs) = state(b.id)
-          for (a <- as.values; b <- bs.values) {
-            sendToParents(Evict(combine(a, b)))
-          }
-          state -= b.id
-        }
+        // Join is stateless, so no need to do anything on eviction
     }
   }
 }
