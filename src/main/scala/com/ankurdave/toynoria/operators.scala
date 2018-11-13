@@ -2,53 +2,7 @@ package com.ankurdave.toynoria
 
 import scala.collection.mutable
 
-trait Record {
-  def id: Id
-}
-
-/**
- * Noria dataflow node.
- */
-sealed trait Node[ResultType <: Record] {
-  def query(): Seq[ResultType]
-
-  private val parents = mutable.ArrayBuffer.empty[UnaryNode[ResultType, _]]
-  private val leftParents = mutable.ArrayBuffer.empty[BinaryNode[ResultType, _, _]]
-  private val rightParents = mutable.ArrayBuffer.empty[BinaryNode[_, ResultType, _]]
-  def addParent(p: UnaryNode[ResultType, _]): Unit = {
-    parents += p
-  }
-  def addLeftParent(p: BinaryNode[ResultType, _, _]): Unit = {
-    leftParents += p
-  }
-  def addRightParent(p: BinaryNode[_, ResultType, _]): Unit = {
-    rightParents += p
-  }
-  protected def sendToParents(x: Msg[ResultType]): Unit = {
-    for (p <- parents) {
-      p.handle(x)
-    }
-    for (p <- leftParents) {
-      p.handleLeft(x)
-    }
-    for (p <- rightParents) {
-      p.handleRight(x)
-    }
-  }
-}
-
-sealed trait UnaryNode[InputType <: Record, ResultType <: Record] extends Node[ResultType] {
-  def handle(msg: Msg[InputType]): Unit
-}
-
-sealed trait BinaryNode[LeftInputType <: Record, RightInputType <: Record, ResultType <: Record]
-  extends Node[ResultType] {
-
-  def handleLeft(msg: Msg[LeftInputType]): Unit
-  def handleRight(msg: Msg[RightInputType]): Unit
-}
-
-case class Table[T <: Record]() extends UnaryNode[T, T] {
+case class Table[T <: Record]() extends UnaryNode[T, T] with FullStateNode[T] {
   private val records = new mutable.HashMap[Id, T]
 
   override def handle(msg: Msg[T]): Unit = {
@@ -76,6 +30,11 @@ case class Aggregate[A <: Record](
   child: Node[A]) extends UnaryNode[A, A] {
 
   private val state = new mutable.HashMap[Id, A]
+  private var partialStateEnabled = true
+
+  override def disablePartialState(): Unit = {
+    partialStateEnabled = false
+  }
 
   override def handle(msg: Msg[A]): Unit = {
     logTrace("Aggregate.handle " + msg)
@@ -118,9 +77,11 @@ case class Aggregate[A <: Record](
         }
 
       case Evict(a) =>
-        if (state.contains(a.id)) {
-          state -= a.id
-          sendToParents(Evict(a))
+        if (partialStateEnabled) {
+          if (state.contains(a.id)) {
+            state -= a.id
+            sendToParents(Evict(a))
+          }
         }
     }
     logTrace("post: Agg = " + state.toString)
@@ -134,7 +95,7 @@ case class Aggregate[A <: Record](
 case class Join[A <: Record, B <: Record, C <: Record](
   combine: (A, B) => C,
   left: Node[A],
-  right: Node[B]) extends BinaryNode[A, B, C] {
+  right: Node[B]) extends BinaryNode[A, B, C] with StatelessNode[C] {
 
   override def query(): Seq[C] = {
     val as = left.query().groupBy(_.id)
@@ -195,7 +156,7 @@ case class Join[A <: Record, B <: Record, C <: Record](
 
 case class TopK[A <: Record : Ordering](
   k: Int,
-  child: Node[A]) extends UnaryNode[A, A] {
+  child: Node[A]) extends UnaryNode[A, A] with FullStateNode[A] {
 
   private val state = mutable.HashMap[Id, A]()
 
@@ -269,16 +230,3 @@ case class TopK[A <: Record : Ordering](
 
   }
 }
-
-/**
- * Noria dataflow message.
- */
-sealed trait Msg[A]
-
-case class Insert[A](x: A) extends Msg[A]
-
-case class Update[A](x: A) extends Msg[A]
-
-case class Delete[A](x: A) extends Msg[A]
-
-case class Evict[A](x: A) extends Msg[A]

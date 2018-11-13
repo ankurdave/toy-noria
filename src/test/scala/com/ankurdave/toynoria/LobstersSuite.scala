@@ -37,6 +37,9 @@ class LobstersSuite extends FunSuite {
     stories.addLeftParent(storiesWithVoteCount)
     totalVotesByStoryId.addRightParent(storiesWithVoteCount)
     storiesWithVoteCount.addParent(topStories)
+    // Sec 4.5: Noria disables partial state for operators upstream of full-state descendants. TopK
+    // is a full-state descendant of Aggregate.
+    totalVotesByStoryId.disablePartialState()
 
     logTrace("Inserting stories")
     stories.handle(Insert(Story(1, "Story A")))
@@ -75,5 +78,16 @@ class LobstersSuite extends FunSuite {
       Seq(
         StoryWithVoteCount(1, "Story A", 3),
         StoryWithVoteCount(3, "Story C", 101)).map(_.toString))
+
+    votes.handle(Evict(Vote(1, 0)))
+    votes.handle(Evict(Vote(2, 0)))
+    votes.handle(Evict(Vote(3, 0)))
+
+    votes.handle(Insert(Vote(3, +1)))
+
+    assert(topStories.query().map(_.toString) ===
+      Seq(
+        StoryWithVoteCount(1, "Story A", 3),
+        StoryWithVoteCount(3, "Story C", 102)).map(_.toString))
   }
 }
