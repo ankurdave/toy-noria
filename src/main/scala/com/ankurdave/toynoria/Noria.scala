@@ -46,7 +46,7 @@ case class Table[T]() extends UnaryNode[T, T] {
   private val records = new mutable.HashSet[T]
 
   override def handle(msg: Msg[T]): Unit = {
-    println("Table.handle " + msg)
+    logTrace("Table.handle " + msg)
     msg match {
       case Insert(x) =>
         records += x
@@ -68,28 +68,28 @@ case class Aggregate[A, B](
   key: A => (Id, B),
   add: (B, B) => B,
   subtract: (B, B) => B,
-  child: Node[A]) extends UnaryNode[A, (Id, B)] {
+  child: Node[A]) extends UnaryNode[A, AggResult[B]] {
 
   private val state = new mutable.HashMap[Id, B]
 
   override def handle(msg: Msg[A]): Unit = {
-    println("Aggregate.handle " + msg)
+    logTrace("Aggregate.handle " + msg)
     msg match {
       case Insert(x) =>
         val (id, b) = key(x)
         if (state.contains(id)) {
           state.update(id, add(state(id), b))
-          sendToParents(Update(Tuple2(id, state(id))))
+          sendToParents(Update(AggResult(id, state(id))))
         } else {
           state.update(id, b)
-          sendToParents(Insert(Tuple2(id, state(id))))
+          sendToParents(Insert(AggResult(id, state(id))))
         }
 
       case Update(x) =>
         val (id, b) = key(x)
         if (state.contains(id)) {
           state.update(id, add(state(id), b))
-          sendToParents(Update(Tuple2(id, state(id))))
+          sendToParents(Update(AggResult(id, state(id))))
         } else {
           // id must have been evicted, so silently drop the update
         }
@@ -98,7 +98,7 @@ case class Aggregate[A, B](
         val (id, b) = key(x)
         if (state.contains(id)) {
           state.update(id, subtract(state(id), b))
-          sendToParents(Update(Tuple2(id, state(id))))
+          sendToParents(Update(AggResult(id, state(id))))
         } else {
           // id must have been evicted, so silently drop the deletion
         }
@@ -106,14 +106,14 @@ case class Aggregate[A, B](
       case Evict(x) =>
         val (id, b) = key(x)
         if (state.contains(id)) {
-          sendToParents(Evict(Tuple2(id, state(id))))
+          sendToParents(Evict(AggResult(id, state(id))))
           state -= id
         }
     }
   }
 
-  override def query(): Seq[(Id, B)] = {
-    state.toSeq
+  override def query(): Seq[AggResult[B]] = {
+    state.toSeq.map { case (id, b) => AggResult(id, b) }
   }
 }
 
@@ -137,7 +137,7 @@ case class Join[A, B, C, D, E](
   }
 
   override def handleLeft(msg: Msg[A]): Unit = {
-    println("Join.handleLeft " + msg)
+    logTrace("Join.handleLeft " + msg)
     msg match {
       case Insert(x) =>
         val (id, b) = keyLeft(x)
@@ -203,7 +203,7 @@ case class Join[A, B, C, D, E](
   }
 
   override def handleRight(msg: Msg[C]): Unit = {
-    println("Join.handleRight " + msg)
+    logTrace("Join.handleRight " + msg)
     msg match {
       case Insert(x) =>
         val (id, d) = keyRight(x)
@@ -276,14 +276,14 @@ case class TopK[A : Ordering](
   k: Int,
   child: Node[A]) extends UnaryNode[A, A] {
 
-  private val state = mutable.SortedSet[A]()
+  private val state = mutable.HashSet[A]()
 
   override def query(): Seq[A] = {
-    state.toSeq
+    state.toSeq.sorted
   }
 
   override def handle(msg: Msg[A]): Unit = {
-    println("TopK.handle " + msg)
+    logTrace("TopK.handle " + msg)
     msg match {
       case Insert(x) =>
         if (state.size < k) {
@@ -298,23 +298,24 @@ case class TopK[A : Ordering](
         }
 
       case Update(x) =>
-        if (state.contains(x)) {
+        if (state.size == 0 || implicitly[Ordering[A]].gt(x, state.min)) {
+          // The element is in the top k after the update
           state -= x
-        }
-        if (implicitly[Ordering[A]].gt(x, state.min)) {
-          // The element remains in the top k after the update
           handle(Insert(x))
           sendToParents(Update(x))
         } else {
-          // The update has caused this record to drop below the current minimum. It may still be in
-          // the top k, or some other element may now replace it in the top k. For correctness we
-          // must request a full refresh from the child.
-          for (a <- query()) {
-            sendToParents(Delete(a))
-          }
-          state.clear()
-          for (a <- child.query()) {
-            handle(Insert(a))
+          if (state.contains(x)) {
+            // The update has caused this record to drop below the current minimum. It may still be in
+            // the top k, or some other element may now replace it in the top k. For correctness we
+            // must request a full refresh from the child.
+            logTrace("clear")
+            for (a <- query()) {
+              sendToParents(Delete(a))
+            }
+            state.clear()
+            for (a <- child.query()) {
+              handle(Insert(a))
+            }
           }
         }
 
@@ -334,6 +335,8 @@ case class TopK[A : Ordering](
         // TopK does not support eviction because it inherently uses bounded space. Drop the
         // eviction request.
     }
+    logTrace("TopK = " + state.toString)
+
   }
 }
 
@@ -350,52 +353,74 @@ case class Delete[A](x: A) extends Msg[A]
 
 case class Evict[A](x: A) extends Msg[A]
 
+/** Record type returned by aggregation. */
+case class AggResult[A](id: Id, a: A) {
+  override def equals(other: Any): Boolean = other match {
+    case AggResult(otherId, _) => id == otherId
+    case _ => false
+  }
+  override def hashCode: Int = id.hashCode
+}
+
 // Application-specific record types
 
-case class Vote(storyId: Id, voterId: Id, vote: Int)
+case class Vote(storyId: Id, vote: Int)
 
-case class Story(id: Id, submitterId: Id, title: String)
+case class Story(id: Id, title: String) {
+  override def equals(other: Any): Boolean = other match {
+    case Story(otherId, _) => id == otherId
+    case _ => false
+  }
+  override def hashCode: Int = id.hashCode
+}
 
-case class StoryWithVoteCount(id: Id, submitterId: Id, title: String, voteCount: Int)
+case class StoryWithVoteCount(id: Id, title: String, voteCount: Int) {
+  override def equals(that: Any): Boolean = that match {
+    case StoryWithVoteCount(otherId, _, _) => id == otherId
+    case _ => false
+  }
+  override def hashCode: Int = id.hashCode
+}
 
 object Noria {
   def main(args: Array[String]): Unit = {
     val votes = Table[Vote]()
     val stories = Table[Story]()
     val totalVotesByStoryId = Aggregate[Vote, Int](
-      (vote: Vote) => (vote.storyId, 1),
+      (vote: Vote) => (vote.storyId, vote.vote),
       _ + _,
       _ - _,
       votes)
-    val storiesWithVoteCount = Join[Story, Story, (Id, Int), Int, StoryWithVoteCount](
+    val storiesWithVoteCount = Join[Story, Story, AggResult[Int], Int, StoryWithVoteCount](
       (story: Story) => (story.id, story),
-      (pair: (Id, Int)) => pair,
+      (aggResult: AggResult[Int]) => (aggResult.id, aggResult.a),
       (storyId, story: Story, voteCount: Int) => StoryWithVoteCount(
-        story.id, story.submitterId, story.title, voteCount),
+        story.id, story.title, voteCount),
       (storyId, story: Story) => story.id == storyId,
-      (storyId, pair: (Id, Int)) => pair match { case (storyId2, _) => storyId == storyId2 },
+      (storyId, aggResult: AggResult[Int]) => storyId == aggResult.id,
       stories,
       totalVotesByStoryId)
     val topStories =
-      TopK(5, storiesWithVoteCount)(Ordering.by(_.voteCount))
+      TopK(2, storiesWithVoteCount)(Ordering.by(_.voteCount))
 
     votes.addParent(totalVotesByStoryId)
     stories.addLeftParent(storiesWithVoteCount)
     totalVotesByStoryId.addRightParent(storiesWithVoteCount)
     storiesWithVoteCount.addParent(topStories)
 
-    stories.handle(Insert(Story(1, 1, "Story 1")))
-    stories.handle(Insert(Story(2, 1, "Story 2")))
-    stories.handle(Insert(Story(3, 2, "Story 3")))
+    stories.handle(Insert(Story(1, "Story A")))
+    stories.handle(Insert(Story(2, "Story B")))
+    stories.handle(Insert(Story(3, "Story C")))
 
+
+    votes.handle(Insert(Vote(1, +1)))
+    votes.handle(Insert(Vote(1, +1)))
+    votes.handle(Insert(Vote(1, +1)))
+    votes.handle(Insert(Vote(2, -1)))
     println(topStories.query())
-
-    votes.handle(Insert(Vote(1, 1, +1)))
-    votes.handle(Insert(Vote(1, 2, +1)))
-    votes.handle(Insert(Vote(1, 3, +1)))
-    votes.handle(Insert(Vote(2, 1, -1)))
-    votes.handle(Insert(Vote(2, 2, +1)))
-    votes.handle(Insert(Vote(2, 3, +1)))
+    votes.handle(Insert(Vote(2, +1)))
+    votes.handle(Insert(Vote(2, +1)))
+    votes.handle(Insert(Vote(3, +100)))
 
     println(topStories.query())
   }
