@@ -6,7 +6,7 @@ import scala.collection.mutable
  * Node representing a base table.
  * 
  * Maintains a hashtable with all records that have ever been inserted. Modifications to a base
- * table should be communicated by calling the `handle` method.
+ * table should be communicated by calling [[handle]].
  * 
  * The hashtable is memory-only; persistence is not implemented.
  */
@@ -36,7 +36,7 @@ case class Table[T <: Record]() extends UnaryNode[T, T] with FullStateNode[T] {
  * which must be a subtype of [[Record]].
  * 
  * Maintains a hashtable with the current aggregate value for each group. Unless
- * `disablePartialState()` is called, groups can be evicted. When new records for an evicted key
+ * [[disablePartialState]] is called, groups can be evicted. When new records for an evicted key
  * arrive, this node queries `child` for any other records from the same group.
  */
 case class Aggregate[A <: Record](
@@ -111,7 +111,7 @@ case class Aggregate[A <: Record](
 /**
  * Node representing a streaming inner equijoin between records from a left child and records from a
  * right child. The equijoin is performed on the `id` field of the left and right input elements,
- * which must be a subtype of `Record`.
+ * which must be a subtype of [[Record]].
  * 
  * The join is implemented statelessly by querying the child nodes (see section 4.3 of the Noria
  * paper). When a record from one side arrives, [[Join]] issues a query for matching records in the
@@ -183,8 +183,8 @@ case class Join[A <: Record, B <: Record, C <: Record](
  * Node representing a streaming top-k operation.
  * 
  * Maintains the top k records seen so far. Records are compared using the provided
- * [[math.Ordering]] typeclass. If a record is updated to have a lower ordering value, or is
- * deleted, then a full scan of all previous input will be triggered.
+ * [[scala.Ordering]]. If a record is updated to have a lower ordering value, or is deleted, then a
+ * full scan of all previous input will be triggered.
  * 
  * This is a full-state operator. Records cannot be evicted, because reloading them would require a
  * full scan of all previous input.

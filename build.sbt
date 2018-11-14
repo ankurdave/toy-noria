@@ -8,8 +8,6 @@ scalaVersion := "2.12.7"
 
 libraryDependencies += "org.scalatest" %% "scalatest" % "3.0.5" % "test"
 
-javaOptions in Test ++= Seq("-Xmx2048m", "-XX:ReservedCodeCacheSize=384m")
-
 scalacOptions ++= Seq(
   "-deprecation",
   "-encoding", "UTF-8",
@@ -27,3 +25,5 @@ scalacOptions ++= Seq(
 )
 
 scalacOptions in (Compile, console) := Seq.empty
+
+autoAPIMappings := true
