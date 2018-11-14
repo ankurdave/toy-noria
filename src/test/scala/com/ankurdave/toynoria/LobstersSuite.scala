@@ -54,19 +54,19 @@ class LobstersSuite extends FunSuite {
     logTrace("Inserting 1 downvote for story 2")
     votes.handle(Insert(Vote(2, -1)))
 
-    assert(topStories.query().map(_.toString) ===
+    assert(topStories.query() ===
       Seq(
         StoryWithVoteCount(2, "Story B", -1),
-        StoryWithVoteCount(1, "Story A", 3)).map(_.toString))
+        StoryWithVoteCount(1, "Story A", 3)))
 
     votes.handle(Insert(Vote(2, +1)))
     votes.handle(Insert(Vote(2, +1)))
     votes.handle(Insert(Vote(3, +100)))
 
-    assert(topStories.query().map(_.toString) ===
+    assert(topStories.query() ===
       Seq(
         StoryWithVoteCount(1, "Story A", 3),
-        StoryWithVoteCount(3, "Story C", 100)).map(_.toString))
+        StoryWithVoteCount(3, "Story C", 100)))
 
     stories.handle(Evict(Story(1, "Story A")))
     stories.handle(Evict(Story(2, "Story B")))
@@ -74,10 +74,10 @@ class LobstersSuite extends FunSuite {
 
     votes.handle(Insert(Vote(3, +1)))
 
-    assert(topStories.query().map(_.toString) ===
+    assert(topStories.query() ===
       Seq(
         StoryWithVoteCount(1, "Story A", 3),
-        StoryWithVoteCount(3, "Story C", 101)).map(_.toString))
+        StoryWithVoteCount(3, "Story C", 101)))
 
     votes.handle(Evict(Vote(1, 0)))
     votes.handle(Evict(Vote(2, 0)))
@@ -85,9 +85,9 @@ class LobstersSuite extends FunSuite {
 
     votes.handle(Insert(Vote(3, +1)))
 
-    assert(topStories.query().map(_.toString) ===
+    assert(topStories.query() ===
       Seq(
         StoryWithVoteCount(1, "Story A", 3),
-        StoryWithVoteCount(3, "Story C", 102)).map(_.toString))
+        StoryWithVoteCount(3, "Story C", 102)))
   }
 }
