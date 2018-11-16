@@ -36,6 +36,9 @@ trait Node[ResultType <: Record] {
   /** Requests a full scan of this node's output. */
   def query(): Seq[ResultType]
 
+  /** Requests a filtered scan of this node's output. */
+  def query(id: Id): Seq[ResultType]
+
   private val parents = mutable.ArrayBuffer.empty[UnaryNode[ResultType, _]]
   private val leftParents = mutable.ArrayBuffer.empty[BinaryNode[ResultType, _, _]]
   private val rightParents = mutable.ArrayBuffer.empty[BinaryNode[_, ResultType, _]]

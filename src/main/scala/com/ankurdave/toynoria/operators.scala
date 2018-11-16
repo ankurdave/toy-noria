@@ -29,6 +29,8 @@ case class Table[T <: Record]() extends UnaryNode[T, T] with FullStateNode[T] {
   }
 
   override def query(): Seq[T] = records.values.toSeq
+
+  override def query(id: Id): Seq[T] = records.get(id).toSeq
 }
 
 /**
@@ -48,6 +50,10 @@ case class Aggregate[A <: Record](
   private val state = new mutable.HashMap[Id, A]
   private var partialStateEnabled = true
 
+  override def query(): Seq[A] = state.values.toSeq
+
+  override def query(id: Id): Seq[A] = state.get(id).toSeq
+
   override def disablePartialState(): Unit = {
     partialStateEnabled = false
   }
@@ -65,10 +71,7 @@ case class Aggregate[A <: Record](
           state.update(a.id, zero(a.id))
           sendToParents(Insert(state(a.id)))
           logTrace("Aggregate requesting all records...")
-          for {
-            a2 <- child.query()
-            if a.id == a2.id
-          } {
+          for (a2 <- child.query(a.id)) {
             handle(Insert(a2))
           }
           logTrace("...done.")
@@ -102,10 +105,6 @@ case class Aggregate[A <: Record](
     }
     logTrace("post: Agg = " + state.toString)
   }
-
-  override def query(): Seq[A] = {
-    state.values.toSeq
-  }
 }
 
 /**
@@ -132,21 +131,30 @@ case class Join[A <: Record, B <: Record, C <: Record](
     } yield combine(a, b)
   }
 
+  override def query(id: Id): Seq[C] = {
+    val as = left.query(id)
+    val bs = right.query(id)
+    for {
+      a <- as
+      b <- bs
+    } yield combine(a, b)
+  }
+
   override def handleLeft(msg: Msg[A]): Unit = {
     logTrace("Join.handleLeft " + msg)
     msg match {
       case Insert(a) =>
-        for (b <- right.query(); if a.id == b.id) {
+        for (b <- right.query(a.id)) {
           sendToParents(Insert(combine(a, b)))
         }
 
       case Update(a) =>
-        for (b <- right.query(); if a.id == b.id) {
+        for (b <- right.query(a.id)) {
           sendToParents(Update(combine(a, b)))
         }
 
       case Delete(a) =>
-        for (b <- right.query(); if a.id == b.id) {
+        for (b <- right.query(a.id)) {
           sendToParents(Delete(combine(a, b)))
         }
 
@@ -159,17 +167,17 @@ case class Join[A <: Record, B <: Record, C <: Record](
     logTrace("Join.handleRight " + msg)
     msg match {
       case Insert(b) =>
-        for (a <- left.query(); if a.id == b.id) {
+        for (a <- left.query(b.id)) {
           sendToParents(Insert(combine(a, b)))
         }
 
       case Update(b) =>
-        for (a <- left.query(); if a.id == b.id) {
+        for (a <- left.query(b.id)) {
           sendToParents(Update(combine(a, b)))
         }
 
       case Delete(b) =>
-        for (a <- left.query(); if a.id == b.id) {
+        for (a <- left.query(b.id)) {
           sendToParents(Delete(combine(a, b)))
         }
 
@@ -195,9 +203,9 @@ case class TopK[A <: Record : Ordering](
 
   private val state = mutable.HashMap[Id, A]()
 
-  override def query(): Seq[A] = {
-    state.values.toSeq.sorted
-  }
+  override def query(): Seq[A] = state.values.toSeq.sorted
+
+  override def query(id: Id): Seq[A] = state.get(id).toSeq
 
   override def handle(msg: Msg[A]): Unit = {
     logTrace("TopK.handle " + msg)
