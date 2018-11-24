@@ -11,26 +11,26 @@ import scala.collection.mutable
  * The hashtable is memory-only; persistence is not implemented.
  */
 case class Table[T <: Record]() extends UnaryNode[T, T] with FullStateNode[T] {
-  private val records = new mutable.HashMap[Id, T]
+  private val records = new mutable.HashMap[Id, mutable.Set[T]] with mutable.MultiMap[Id, T]
 
   override def handle(msg: Msg[T]): Unit = {
     logTrace("Table.handle " + msg)
     msg match {
       case Insert(x) =>
-        records.update(x.id, x)
+        records.addBinding(x.id, x)
       case Update(x) =>
-        records.update(x.id, x)
+        throw new UnsupportedOperationException("Table can't handle Update")
       case Delete(x) =>
-        records -= x.id
+        records.removeBinding(x.id, x)
       case Evict(x) =>
         // Do nothing: The base table must not evict records, but parents may
     }
     sendToParents(msg)
   }
 
-  override def query(): Seq[T] = records.values.toSeq
+  override def query(): Seq[T] = records.values.flatten.toSeq
 
-  override def query(id: Id): Seq[T] = records.get(id).toSeq
+  override def query(id: Id): Seq[T] = records.get(id).toSeq.flatMap(identity)
 }
 
 /**
