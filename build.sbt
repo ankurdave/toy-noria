@@ -6,6 +6,8 @@ organization := "com.ankurdave"
 
 scalaVersion := "2.12.7"
 
+libraryDependencies += "com.google.guava" % "guava" % "27.0.1-jre"
+
 libraryDependencies += "org.scalatest" %% "scalatest" % "3.0.5" % "test"
 
 scalacOptions ++= Seq(

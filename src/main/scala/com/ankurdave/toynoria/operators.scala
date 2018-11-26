@@ -1,6 +1,7 @@
 package com.ankurdave.toynoria
 
 import scala.collection.mutable
+import scala.reflect.ClassTag
 
 /** 
  * Node representing a base table.
@@ -10,27 +11,28 @@ import scala.collection.mutable
  * 
  * The hashtable is memory-only; persistence is not implemented.
  */
-case class Table[T <: Record]() extends UnaryNode[T, T] with FullStateNode[T] {
-  private val records = new mutable.HashMap[Id, mutable.Set[T]] with mutable.MultiMap[Id, T]
+case class Table[T <: Record : ClassTag]() extends UnaryNode[T, T] with FullStateNode[T] {
+  private val records = new PrimitiveKeyOpenHashMap[Id, T]
 
   override def handle(msg: Msg[T]): Unit = {
     logTrace("Table.handle " + msg)
     msg match {
       case Insert(x) =>
-        records.addBinding(x.id, x)
+        records.update(x.id, x)
       case Update(x) =>
-        throw new UnsupportedOperationException("Table can't handle Update")
+        records.update(x.id, x)
       case Delete(x) =>
-        records.removeBinding(x.id, x)
+        ???
+        // records -= x.id
       case Evict(x) =>
         // Do nothing: The base table must not evict records, but parents may
     }
     sendToParents(msg)
   }
 
-  override def query(): Seq[T] = records.values.flatten.toSeq
+  override def query(): Seq[T] = records.values.toSeq
 
-  override def query(id: Id): Seq[T] = records.get(id).toSeq.flatMap(identity)
+  override def query(id: Id): Seq[T] = if (records.contains(id)) Seq(records(id)) else Seq.empty
 }
 
 /**
@@ -41,18 +43,18 @@ case class Table[T <: Record]() extends UnaryNode[T, T] with FullStateNode[T] {
  * [[disablePartialState]] is called, groups can be evicted. When new records for an evicted key
  * arrive, this node queries `child` for any other records from the same group.
  */
-case class Aggregate[A <: Record](
+case class Aggregate[A <: Record : ClassTag](
   zero: (Id) => A,
   add: (A, A) => A,
   subtract: (A, A) => A,
   child: Node[A]) extends UnaryNode[A, A] {
 
-  private val state = new mutable.HashMap[Id, A]
+  private val state = new PrimitiveKeyOpenHashMap[Id, A]
   private var partialStateEnabled = true
 
   override def query(): Seq[A] = state.values.toSeq
 
-  override def query(id: Id): Seq[A] = state.get(id).toSeq
+  override def query(id: Id): Seq[A] = if (state.contains(id)) Seq(state(id)) else Seq.empty
 
   override def disablePartialState(): Unit = {
     partialStateEnabled = false
@@ -98,7 +100,8 @@ case class Aggregate[A <: Record](
       case Evict(a) =>
         if (partialStateEnabled) {
           if (state.contains(a.id)) {
-            state -= a.id
+            ???
+            // state -= a.id
             sendToParents(Evict(a))
           }
         }
@@ -201,7 +204,7 @@ case class TopK[A <: Record : Ordering](
   k: Int,
   child: Node[A]) extends UnaryNode[A, A] with FullStateNode[A] {
 
-  private val state = mutable.HashMap[Id, A]()
+  private val state = new mutable.HashMap[Id, A]()
 
   override def query(): Seq[A] = state.values.toSeq.sorted
 
