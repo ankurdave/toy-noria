@@ -10,7 +10,7 @@ package object toynoria {
 
   var trace = false
 
-  def logTrace(msg: String) = {
+  def logTrace(msg: => String) = {
     if (trace) {
       println(msg)
     }
