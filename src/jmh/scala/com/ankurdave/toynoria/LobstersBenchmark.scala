@@ -76,8 +76,15 @@ class LobstersBenchmark {
 
   @Benchmark
   @BenchmarkMode(Array(Mode.Throughput))
-  def insertVote(bh: Blackhole): Unit = {
-    votes.handle(Insert(Vote(r.nextInt(nextStoryId), if (r.nextBoolean) +1 else -1)))
+  def insertUpvote(bh: Blackhole): Unit = {
+    votes.handle(Insert(Vote(r.nextInt(nextStoryId), +1)))
+    bh.consume(topStories.query())
+  }
+
+  @Benchmark
+  @BenchmarkMode(Array(Mode.Throughput))
+  def insertDownvote(bh: Blackhole): Unit = {
+    votes.handle(Insert(Vote(r.nextInt(nextStoryId), -1)))
     bh.consume(topStories.query())
   }
 }
