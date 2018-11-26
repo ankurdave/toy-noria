@@ -69,7 +69,7 @@ class LobstersBenchmark {
   @Benchmark
   @BenchmarkMode(Array(Mode.Throughput))
   def insertStory(bh: Blackhole): Unit = {
-    stories.handle(Insert(Story(nextStoryId, rs.take(10).mkString)))
+    stories.handle(Insert(Story(nextStoryId, "story title")))
     nextStoryId += 1
     bh.consume(topStories.query())
   }
