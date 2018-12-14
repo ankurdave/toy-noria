@@ -111,6 +111,8 @@ class CalendarSuite extends FunSuite {
       "Event C - recurring every day at 5 PM from 2018-01-02 to 2018-02-02 except 2018-01-03")))
     eventInfo.handle(Insert(EventInfo(4,
       "Event D - recurring every Thursday at noon from 2017-01-05 to 2018-01-04")))
+    eventInfo.handle(Insert(EventInfo(5,
+      "Event E - covers the entire week")))
 
     logTrace("Constructing week agenda")
     val weekAgenda = agenda(
@@ -151,6 +153,12 @@ class CalendarSuite extends FunSuite {
       Duration.ofHours(1),
       ZonedDateTime.of(2018, 1, 4, 12, 0, 0, 0, ZoneId.of("America/Los_Angeles")),
       ChronoUnit.WEEKS)))
+
+    logTrace("Inserting a one-off event that covers the entire week")
+    oneOffEvents.handle(Insert(OneOffEvent(
+      5,
+      ZonedDateTime.of(2017, 12, 31, 0, 0, 0, 0, ZoneId.of("America/Los_Angeles")),
+      Duration.ofDays(10))))
 
     logTrace("Querying week agenda")
     assert(weekAgenda.query().toSet ===
@@ -194,6 +202,11 @@ class CalendarSuite extends FunSuite {
           4,
           "Event D - recurring every Thursday at noon from 2017-01-05 to 2018-01-04",
           ZonedDateTime.of(2018, 1, 4, 12, 0, 0, 0, ZoneId.of("America/Los_Angeles")),
-          Duration.ofHours(1))))
+          Duration.ofHours(1)),
+        EventOccurrenceWithInfo(
+          5,
+          "Event E - covers the entire week",
+          ZonedDateTime.of(2017, 12, 31, 0, 0, 0, 0, ZoneId.of("America/Los_Angeles")),
+          Duration.ofDays(10))))
   }
 }
