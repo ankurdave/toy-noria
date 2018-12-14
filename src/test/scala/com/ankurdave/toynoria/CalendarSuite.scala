@@ -62,20 +62,12 @@ class CalendarSuite extends FunSuite {
     def agenda(start: ZonedDateTime, end: ZonedDateTime): Node[EventOccurrenceWithInfo] = {
       val currentRecurringEventsExploded = Explode[RecurringEvent, OneOffEvent](
         e => {
-          val nonEmpty = (isBetween(e.start, start, end)
-            || isBetween(e.end, start, end)
-            || contains(e.start, e.end, start, end))
+          val maxRepetitions = e.start.until(e.end, e.frequency)
+          val repetitionsStart = clamp(e.start.until(start, e.frequency), 0, maxRepetitions)
+          val repetitionsEnd = clamp(e.start.until(end, e.frequency), 0, maxRepetitions)
 
-          if (nonEmpty) {
-            val maxRepetitions = e.start.until(e.end, e.frequency)
-            val repetitionsStart = clamp(e.start.until(start, e.frequency), 0, maxRepetitions)
-            val repetitionsEnd = clamp(e.start.until(end, e.frequency), 0, maxRepetitions)
-
-            for (i <- repetitionsStart to repetitionsEnd)
-            yield OneOffEvent(e.id, e.start.plus(i, e.frequency), e.duration)
-          } else {
-            Seq.empty
-          }
+          for (i <- repetitionsStart to repetitionsEnd)
+          yield OneOffEvent(e.id, e.start.plus(i, e.frequency), e.duration)
         },
         recurringEvents)
 
