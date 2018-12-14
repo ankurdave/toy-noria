@@ -59,7 +59,7 @@ class CalendarSuite extends FunSuite {
       else x
     }
 
-    def agenda(start: ZonedDateTime, end: ZonedDateTime): (Node[EventOccurrenceWithInfo], () => Unit) = {
+    def agenda(start: ZonedDateTime, end: ZonedDateTime): Node[EventOccurrenceWithInfo] = {
       val currentRecurringEventsExploded = Explode[RecurringEvent, OneOffEvent](
         e => {
           val nonEmpty = (isBetween(e.start, start, end)
@@ -107,7 +107,7 @@ class CalendarSuite extends FunSuite {
       currentEvents.addLeftParent(currentEventsWithInfo)
       eventInfo.addRightParent(currentEventsWithInfo)
 
-      (currentEventsWithInfo, () => for (e <- currentRecurringEventsMinusCancellations.query()) println(s"debug: $e"))
+      currentEventsWithInfo
     }
 
     logTrace("Inserting event info")
@@ -119,7 +119,7 @@ class CalendarSuite extends FunSuite {
       "Event C - recurring every day at 5 PM from 2018-01-02 to 2018-02-02 except 2018-01-03")))
 
     logTrace("Constructing week agenda")
-    val (weekAgenda, probe) = agenda(
+    val weekAgenda = agenda(
       ZonedDateTime.of(2018, 1, 1, 0, 0, 0, 0, ZoneId.of("America/Los_Angeles")),
       ZonedDateTime.of(2018, 1, 8, 0, 0, 0, 0, ZoneId.of("America/Los_Angeles")))
 
@@ -150,11 +150,7 @@ class CalendarSuite extends FunSuite {
       3,
       ZonedDateTime.of(2018, 1, 3, 17, 0, 0, 0, ZoneId.of("America/Los_Angeles")))))
 
-    probe()
-
     logTrace("Querying week agenda")
-    for (e <- weekAgenda.query()) println(s"Result: $e")
-
     assert(weekAgenda.query().toSet ===
       Set(
         EventOccurrenceWithInfo(
