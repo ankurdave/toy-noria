@@ -22,7 +22,12 @@ case class RecurringEvent(
   start: ZonedDateTime,
   duration: Duration,
   end: ZonedDateTime,
-  frequency: TemporalUnit) extends Record
+  frequency: TemporalUnit) extends Record {
+
+  def numRepetitions: Long = start.until(end, frequency)
+  def repetition(i: Long): OneOffEvent =
+    OneOffEvent(id, start.plus(i, frequency), duration)
+}
 
 case class EventCancellation(
   override val id: Id,
@@ -49,12 +54,9 @@ class Calendar() {
   def agenda(start: ZonedDateTime, end: ZonedDateTime): Node[EventOccurrenceWithInfo] = {
     val currentRecurringEventsExploded = Explode[RecurringEvent, OneOffEvent](
       e => {
-        val maxRepetitions = e.start.until(e.end, e.frequency)
-        val repetitionsStart = clamp(e.start.until(start, e.frequency), 0, maxRepetitions)
-        val repetitionsEnd = clamp(e.start.until(end, e.frequency), 0, maxRepetitions)
-
-        for (i <- repetitionsStart to repetitionsEnd)
-        yield OneOffEvent(e.id, e.start.plus(i, e.frequency), e.duration)
+        val repetitionsStart = clamp(e.start.until(start, e.frequency), 0, e.numRepetitions)
+        val repetitionsEnd = clamp(e.start.until(end, e.frequency), 0, e.numRepetitions)
+        for (i <- repetitionsStart to repetitionsEnd) yield e.repetition(i)
       },
       recurringEvents)
 
