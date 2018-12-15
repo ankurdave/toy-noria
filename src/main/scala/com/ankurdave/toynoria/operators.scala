@@ -33,6 +33,8 @@ case class Table[T <: Record : ClassTag]() extends UnaryNode[T, T] with FullStat
   override def query(): Seq[T] = records.values.toSeq
 
   override def query(id: Id): Seq[T] = if (records.contains(id)) Seq(records(id)) else Seq.empty
+
+  override def keySet(): Set[Id] = records.keys.toSet
 }
 
 /**
@@ -49,6 +51,8 @@ case class Filter[A <: Record](
   override def query(id: Id): Seq[A] = {
     child.query(id).filter(pred)
   }
+
+  override def keySet(): Set[Id] = child.keySet
 
   override def handle(msg: Msg[A]): Unit = {
     logTrace("Filter.handle " + msg)
@@ -94,6 +98,8 @@ case class Aggregate[A <: Record : ClassTag](
   override def query(): Seq[A] = state.values.toSeq
 
   override def query(id: Id): Seq[A] = if (state.contains(id)) Seq(state(id)) else Seq.empty
+
+  override def keySet(): Set[Id] = child.keySet()
 
   override def disablePartialState(): Unit = {
     partialStateEnabled = false
@@ -164,12 +170,12 @@ case class Join[A <: Record, B <: Record, C <: Record](
   right: Node[B]) extends BinaryNode[A, B, C] with StatelessNode[C] {
 
   override def query(): Seq[C] = {
-    val as = left.query().groupBy(_.id)
-    val bs = right.query().groupBy(_.id)
     for {
-      id <- as.keySet.intersect(bs.keySet).toSeq
-      a <- as(id)
-      b <- bs(id)
+      id <- left.keySet.intersect(right.keySet).toSeq
+      as = left.query(id)
+      bs = right.query(id)
+      a <- as
+      b <- bs
     } yield combine(a, b)
   }
 
@@ -181,6 +187,9 @@ case class Join[A <: Record, B <: Record, C <: Record](
       b <- bs
     } yield combine(a, b)
   }
+
+  /** Assumes combine does not change the id. */
+  override def keySet(): Set[Id] = left.keySet.intersect(right.keySet)
 
   override def handleLeft(msg: Msg[A]): Unit = {
     logTrace("Join.handleLeft " + msg)
@@ -248,6 +257,8 @@ case class TopK[A <: Record : Ordering](
   override def query(): Seq[A] = state.values.toSeq.sorted
 
   override def query(id: Id): Seq[A] = state.get(id).toSeq
+
+  override def keySet(): Set[Id] = state.keySet.toSet
 
   override def handle(msg: Msg[A]): Unit = {
     logTrace("TopK.handle " + msg)
@@ -331,6 +342,9 @@ case class Explode[A <: Record, B <: Record](
     child.query(id).flatMap(explode)
   }
 
+  /** Does not drop empty entries. */
+  override def keySet(): Set[Id] = child.keySet()
+
   override def handle(msg: Msg[A]): Unit = {
     logTrace("Explode.handle " + msg)
     msg match {
@@ -364,11 +378,10 @@ case class Antijoin[A <: Record, B <: Record](
   right: Node[B]) extends BinaryNode[A, B, A] with StatelessNode[A] {
 
   override def query(): Seq[A] = {
-    val as = left.query()
-    val bs = right.query().groupBy(_.id)
     for {
-      a <- as
-      if predicate(a, bs.getOrElse(a.id, Seq.empty))
+      a <- left.query()
+      bs = right.query(a.id)
+      if predicate(a, bs)
     } yield a
   }
 
@@ -380,6 +393,8 @@ case class Antijoin[A <: Record, B <: Record](
       if predicate(a, bs)
     } yield a
   }
+
+  override def keySet(): Set[Id] = left.keySet
 
   override def handleLeft(msg: Msg[A]): Unit = {
     logTrace("Antijoin.handleLeft " + msg)
@@ -456,6 +471,8 @@ case class Union[A <: Record](
   override def query(id: Id): Seq[A] = {
     left.query(id) ++ right.query(id)
   }
+
+  override def keySet(): Set[Id] = left.keySet.union(right.keySet)
 
   override def handleLeft(msg: Msg[A]): Unit = {
     logTrace("Union.handleLeft " + msg)

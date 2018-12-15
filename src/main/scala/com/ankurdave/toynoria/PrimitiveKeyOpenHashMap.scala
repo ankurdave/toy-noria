@@ -116,6 +116,34 @@ class PrimitiveKeyOpenHashMap[@specialized(Long, Int) K: ClassTag,
     }
   }
 
+  def keys: Iterator[K] = new Iterator[K] {
+    var pos = 0
+    var nextKey: K = computeNextKey()
+    var hasNext: Boolean = true
+
+    /**
+     * Get the next key we should return from next(). If finished iterating, set hasNext to false.
+     */
+    def computeNextKey(): K = {
+      pos = _keySet.nextPos(pos)
+      if (pos >= 0) {
+        val ret = _keySet.getValue(pos)
+        pos += 1
+        hasNext = true
+        ret
+      } else {
+        hasNext = false
+        null.asInstanceOf[K]
+      }
+    }
+
+    def next(): K = {
+      val key = nextKey
+      nextKey = computeNextKey()
+      key
+    }
+  }
+
   def values: Iterator[V] = new Iterator[V] {
     var pos = 0
     var nextValue: V = computeNextValue()

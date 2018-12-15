@@ -95,6 +95,7 @@ class CalendarBenchmark {
   @Benchmark
   @BenchmarkMode(Array(Mode.Throughput))
   def agenda(bh: Blackhole): Unit = {
+    c.clear()
     val randomAgendaView = Function.tupled(c.agenda _)(randomDatePair())
     bh.consume(randomAgendaView.query())
   }

@@ -51,6 +51,15 @@ class Calendar() {
   val recurringEvents = Table[RecurringEvent]()
   val cancellations = Table[EventCancellation]()
 
+  def clear(): Unit = {
+    for (t <- Seq(eventInfo, oneOffEvents, recurringEvents, cancellations)) {
+      eventInfo.clearParents()
+      oneOffEvents.clearParents()
+      recurringEvents.clearParents()
+      cancellations.clearParents()
+    }
+  }
+
   def agenda(start: ZonedDateTime, end: ZonedDateTime): Node[EventOccurrenceWithInfo] = {
     val currentRecurringEventsExploded = Explode[RecurringEvent, OneOffEvent](
       e => {

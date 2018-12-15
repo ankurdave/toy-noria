@@ -39,6 +39,9 @@ trait Node[ResultType <: Record] {
   /** Requests a filtered scan of this node's output. */
   def query(id: Id): Seq[ResultType]
 
+  /** Requests the set of keys represented in this node's output. */
+  def keySet(): Set[Id]
+
   private val parents = mutable.ArrayBuffer.empty[UnaryNode[ResultType, _]]
   private val leftParents = mutable.ArrayBuffer.empty[BinaryNode[ResultType, _, _]]
   private val rightParents = mutable.ArrayBuffer.empty[BinaryNode[_, ResultType, _]]
@@ -65,6 +68,12 @@ trait Node[ResultType <: Record] {
    */
   def addRightParent(p: BinaryNode[_, ResultType, _]): Unit = {
     rightParents += p
+  }
+
+  def clearParents(): Unit = {
+    parents.clear()
+    leftParents.clear()
+    rightParents.clear()
   }
 
   /** Sends output to all this node's parents. Currently implemented synchronously. */
